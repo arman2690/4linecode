@@ -16,15 +16,23 @@ import {
 export default function SettingsPage() {
   const [currency, setCurrency] = useState("INR");
   const [warrantyAlerts, setWarrantyAlerts] = useState(true);
+  const [aiKey, setAiKey] = useState("");
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("receiptiq_currency");
     if (saved) setCurrency(saved);
+    const savedKey = localStorage.getItem("receiptiq_ai_key");
+    if (savedKey) setAiKey(savedKey);
   }, []);
 
   const handleSaveSettings = () => {
     localStorage.setItem("receiptiq_currency", currency);
+    if (aiKey) {
+      localStorage.setItem("receiptiq_ai_key", aiKey.trim());
+    } else {
+      localStorage.removeItem("receiptiq_ai_key");
+    }
     window.dispatchEvent(new Event("currencyChanged"));
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 2500);
@@ -97,6 +105,42 @@ export default function SettingsPage() {
                   <span className="text-[11px] text-brand-muted block">{c.name}</span>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* AI Intelligence API Key Section */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 pb-3 border-b border-brand-border">
+              <Shield className="w-5 h-5 text-brand-blue" />
+              <div>
+                <h3 className="text-base font-bold text-brand-navy">AI Parsing Provider (Optional)</h3>
+                <p className="text-xs text-brand-muted">Provide your own Google Gemini or OpenAI API Key for deep line-item structuring</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-brand-navy">
+                Gemini API Key (starts with AIza...) or OpenAI Key (starts with sk-...)
+              </label>
+              <input
+                type="password"
+                value={aiKey}
+                onChange={(e) => setAiKey(e.target.value)}
+                placeholder="AIzaSy... or sk-..."
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-blue/30"
+              />
+              <p className="text-[11px] text-brand-muted">
+                Tip: You can get a free Gemini API key in 30 seconds at{" "}
+                <a
+                  href="https://aistudio.google.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-brand-blue font-semibold hover:underline"
+                >
+                  aistudio.google.com
+                </a>
+                .
+              </p>
             </div>
           </div>
 

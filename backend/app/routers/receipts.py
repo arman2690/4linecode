@@ -1,7 +1,7 @@
 import os
 import shutil
 from typing import List, Optional
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, status
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, status, Request
 from ..core.auth import get_current_user, AuthenticatedUser
 from ..models.receipt import (
     ReceiptCreate,
@@ -20,6 +20,7 @@ router = APIRouter(prefix="/receipts", tags=["Receipts"])
 
 @router.post("/upload", response_model=ExtractionResult)
 async def upload_and_process_receipt(
+    request: Request,
     file: UploadFile = File(...),
     user: AuthenticatedUser = Depends(get_current_user)
 ):
@@ -73,10 +74,12 @@ async def upload_and_process_receipt(
         confidence = 0.70
 
     # AI structured extraction
+    ai_key = request.headers.get("x-ai-key")
     result = await ai_extraction_service.process_receipt(
         raw_text=raw_text,
         filename=file.filename,
-        ocr_confidence=confidence
+        ocr_confidence=confidence,
+        ai_key=ai_key
     )
 
     return result

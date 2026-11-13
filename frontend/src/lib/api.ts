@@ -10,6 +10,11 @@ export async function fetchWithAuth(endpoint: string, options: RequestInit = {})
   if (typeof window !== "undefined") {
     const token = localStorage.getItem("receiptiq_token") || "demo-token";
     headers.set("Authorization", `Bearer ${token}`);
+
+    const aiKey = localStorage.getItem("receiptiq_ai_key");
+    if (aiKey) {
+      headers.set("X-AI-Key", aiKey.trim());
+    }
   }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
