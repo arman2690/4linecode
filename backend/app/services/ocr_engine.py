@@ -9,16 +9,31 @@ class OCREngine:
     
     @staticmethod
     def extract_text_from_pdf(pdf_bytes: bytes) -> Tuple[str, float]:
-        """Extracts direct text from searchable PDF or falls back to OCR."""
+        """Extracts direct text and tables from searchable PDF or falls back to OCR."""
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         full_text = []
         for page in doc:
-            full_text.append(page.get_text("text"))
+            # 1. Extract tables if available
+            try:
+                tabs = page.find_tables()
+                for tab in tabs:
+                    table_rows = tab.extract()
+                    for r in table_rows:
+                        clean_row = [str(c).strip() for c in r if c and str(c).strip()]
+                        if clean_row:
+                            full_text.append(" | ".join(clean_row))
+            except Exception:
+                pass
+
+            # 2. Extract reading-order sorted text
+            sorted_text = page.get_text("text", sort=True)
+            if sorted_text:
+                full_text.append(sorted_text)
+
         doc.close()
         
         extracted = "\n".join(full_text).strip()
         if len(extracted) > 30:
-            # High confidence because text was digitally encoded in PDF
             return extracted, 0.98
         return extracted, 0.50
 

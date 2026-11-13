@@ -1,5 +1,6 @@
 import json
 import re
+import os
 from datetime import date, datetime
 from typing import Optional, Dict, Any, List
 import httpx
@@ -28,49 +29,6 @@ class OpenAIExtractor(BaseAIExtractor):
             "['Electronics', 'Groceries', 'Food and beverages', 'Clothing', 'Healthcare', 'Transportation', 'Education', 'Entertainment', 'Household', 'Personal care', 'Travel', 'Other']. "
             "Extract warranty duration, return policy, and serial number only if explicitly stated."
         )
-        
-        json_schema = {
-            "type": "object",
-            "properties": {
-                "merchant_name": {"type": "string"},
-                "merchant_address": {"type": ["string", "null"]},
-                "merchant_phone": {"type": ["string", "null"]},
-                "invoice_number": {"type": ["string", "null"]},
-                "receipt_number": {"type": ["string", "null"]},
-                "purchase_date": {"type": "string", "description": "YYYY-MM-DD"},
-                "currency": {"type": "string", "default": "INR"},
-                "subtotal": {"type": "number"},
-                "discount": {"type": "number"},
-                "tax": {"type": "number"},
-                "cgst": {"type": "number"},
-                "sgst": {"type": "number"},
-                "igst": {"type": "number"},
-                "additional_charges": {"type": "number"},
-                "delivery_fees": {"type": "number"},
-                "grand_total": {"type": "number"},
-                "payment_method": {"type": ["string", "null"]},
-                "document_type": {"type": "string"},
-                "warranty_duration": {"type": ["string", "null"]},
-                "return_policy": {"type": ["string", "null"]},
-                "serial_number": {"type": ["string", "null"]},
-                "important_notes": {"type": ["string", "null"]},
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "product_name": {"type": "string"},
-                            "quantity": {"type": "number"},
-                            "unit_price": {"type": "number"},
-                            "total_price": {"type": "number"},
-                            "category": {"type": "string"}
-                        },
-                        "required": ["product_name", "quantity", "unit_price", "total_price"]
-                    }
-                }
-            },
-            "required": ["merchant_name", "purchase_date", "grand_total"]
-        }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(
@@ -93,63 +51,194 @@ class OpenAIExtractor(BaseAIExtractor):
 class GeminiExtractor(BaseAIExtractor):
     def __init__(self, api_key: str):
         self.api_key = api_key
+        # Use gemini-1.5-flash which is widely available and fast
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
 
     async def extract(self, raw_text: str, filename: str = "") -> Dict[str, Any]:
         prompt = (
-            "Extract structured receipt data in pure JSON format with keys: "
-            "merchant_name, merchant_address, merchant_phone, invoice_number, receipt_number, purchase_date (YYYY-MM-DD), "
-            "currency, subtotal, discount, tax, cgst, sgst, igst, additional_charges, delivery_fees, grand_total, payment_method, "
+            "You are an expert receipt parser. Extract structured receipt details strictly in JSON format without markdown fences. "
+            "Fields required: "
+            "merchant_name, merchant_address, merchant_phone, invoice_number, receipt_number, purchase_date (format YYYY-MM-DD), "
+            "currency (default INR), subtotal, discount, tax, cgst, sgst, igst, additional_charges, delivery_fees, grand_total, payment_method, "
             "document_type, warranty_duration, return_policy, serial_number, important_notes, and items "
-            "(array of {product_name, quantity, unit_price, total_price, category}). Return JSON only.\n\n"
+            "(array of {product_name, quantity, unit_price, total_price, category}).\n\n"
             f"Receipt Text:\n{raw_text}"
         )
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(
                 self.endpoint,
+                headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": prompt}]}]}
             )
             res.raise_for_status()
             data = res.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
-            # Clean markdown fences
             clean = re.sub(r"^```json\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
             return json.loads(clean)
 
 class RuleBasedFallbackExtractor(BaseAIExtractor):
-    """Provides high-quality deterministic parsing for common invoice formats when LLM API keys are not supplied."""
+    """
+    High-precision deterministic parser for PDF invoices and receipts.
+    Extracts actual merchant names, real invoice totals, line items, and taxes without fabricating synthetic ratios.
+    """
     async def extract(self, raw_text: str, filename: str = "") -> Dict[str, Any]:
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         
-        # Heuristic merchant name
-        merchant_name = lines[0] if lines else "Store Receipt"
-        if len(merchant_name) > 60 or "invoice" in merchant_name.lower():
-            merchant_name = "Retail Merchant"
+        # 1. MERCHANT NAME EXTRACTION
+        # Exclude typical header keywords
+        ignore_headers = [
+            "tax invoice", "invoice", "retail invoice", "bill of supply", "original for recipient",
+            "duplicate for supplier", "triplicate for transporter", "cash receipt", "e-way bill",
+            "page 1", "page 2", "gstin", "cin", "pan", "gst invoice"
+        ]
+        
+        merchant_name = ""
+        for line in lines[:10]:
+            clean_l = line.lower()
+            if any(ign in clean_l for ign in ignore_headers) or len(line) < 3 or line.isdigit():
+                continue
+            # Prefer names with business suffixes or prominent title casing
+            merchant_name = line
+            break
 
-        # Search for amounts
-        amounts = re.findall(r"(?:₹|Rs\.?|INR)?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2}))", raw_text)
-        float_amounts = []
-        for a in amounts:
-            try:
-                float_amounts.append(float(a.replace(",", "")))
-            except ValueError:
-                pass
-        
-        grand_total = max(float_amounts) if float_amounts else 0.0
-        
-        # Date extraction
-        date_match = re.search(r"(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})|(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})", raw_text)
+        if not merchant_name:
+            # Fallback to filename or clean title
+            clean_fn = re.sub(r"[-_]", " ", os.path.splitext(filename)[0]).title()
+            merchant_name = clean_fn if clean_fn and len(clean_fn) > 3 else "Merchant Store"
+
+        # 2. INVOICE NUMBER EXTRACTION
+        invoice_number = None
+        inv_match = re.search(
+            r"(?:invoice\s*(?:no|number|#)|inv\s*no\.?|bill\s*(?:no|number|#)|receipt\s*(?:no|number|#))[\s.:#-]*([A-Za-z0-9\/-]+)",
+            raw_text,
+            re.IGNORECASE
+        )
+        if inv_match:
+            candidate = inv_match.group(1).strip()
+            if len(candidate) >= 3 and not candidate.lower() in ["date", "time", "original"]:
+                invoice_number = candidate
+
+        # 3. DATE EXTRACTION
         parsed_date = date.today().isoformat()
-        if date_match:
-            try:
-                dt_str = date_match.group(0).replace("/", "-").replace(".", "-")
-                parsed_date = dt_str
-            except Exception:
-                pass
+        date_patterns = [
+            r"\b(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b",           # 2026-11-02
+            r"\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\b",           # 02/11/2026 or 02-11-2026
+            r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s,]+\d{2,4})\b" # 02 Nov 2026
+        ]
+        for pat in date_patterns:
+            d_match = re.search(pat, raw_text, re.IGNORECASE)
+            if d_match:
+                ds = d_match.group(1).replace("/", "-").replace(".", "-")
+                try:
+                    # Try parsing standard formats
+                    parts = ds.split("-")
+                    if len(parts) == 3:
+                        if len(parts[0]) == 4:  # YYYY-MM-DD
+                            parsed_date = f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+                        else:  # DD-MM-YYYY
+                            parsed_date = f"{int(parts[2]):04d}-{int(parts[1]):02d}-{int(parts[0]):02d}"
+                        break
+                except Exception:
+                    pass
 
-        # Warranty extraction
+        # 4. FINANCIAL AMOUNTS (Strict Keyword Matching)
+        def find_amount(patterns: List[str]) -> float:
+            for pat in patterns:
+                m = re.search(pat, raw_text, re.IGNORECASE)
+                if m:
+                    val_str = m.group(1).replace(",", "").strip()
+                    try:
+                        val = float(val_str)
+                        if val > 0:
+                            return round(val, 2)
+                    except ValueError:
+                        continue
+            return 0.0
+
+        # Grand Total patterns
+        grand_total = find_amount([
+            r"(?:Grand\s*Total|Total\s*Amount|Invoice\s*Total|Net\s*Amount|Amount\s*Payable|Total\s*Payable|Total\s*Due|Total\s*INR|Total\s*₹)[\s:₹RsINR]*([\d,]+\.\d{2})",
+            r"(?:Total)[\s:₹RsINR]*([\d,]+\.\d{2})",
+            r"([\d,]+\.\d{2})\s*(?:Grand\s*Total|Total\s*Amount)",
+        ])
+
+        # Subtotal patterns
+        subtotal = find_amount([
+            r"(?:Sub\s*Total|Sub-total|Subtotal|Taxable\s*Amount|Taxable\s*Value|Item\s*Total)[\s:₹RsINR]*([\d,]+\.\d{2})",
+        ])
+
+        # Tax patterns
+        cgst = find_amount([r"(?:CGST)[\s:₹RsINR@%0-9]*([\d,]+\.\d{2})"])
+        sgst = find_amount([r"(?:SGST|UTGST)[\s:₹RsINR@%0-9]*([\d,]+\.\d{2})"])
+        igst = find_amount([r"(?:IGST)[\s:₹RsINR@%0-9]*([\d,]+\.\d{2})"])
+        tax = find_amount([
+            r"(?:Total\s*Tax|Tax\s*Amount|GST\s*Amount|GST)[\s:₹RsINR]*([\d,]+\.\d{2})",
+        ])
+        if tax == 0.0 and (cgst > 0 or sgst > 0 or igst > 0):
+            tax = round(cgst + sgst + igst, 2)
+
+        # Discount
+        discount = find_amount([
+            r"(?:Discount|Total\s*Discount)[\s:₹RsINR]*([\d,]+\.\d{2})",
+        ])
+
+        # If grand total is still 0, look for currency symbols before decimals
+        if grand_total == 0.0:
+            all_amounts = re.findall(r"(?:₹|Rs\.?|INR)\s*([\d,]+\.\d{2})", raw_text)
+            floats = []
+            for a in all_amounts:
+                try:
+                    f = float(a.replace(",", ""))
+                    # Filter out phone numbers or unrealistically large values
+                    if 1.0 <= f <= 5000000.0:
+                        floats.append(f)
+                except ValueError:
+                    pass
+            grand_total = max(floats) if floats else 0.0
+
+        if subtotal == 0.0 and grand_total > 0:
+            if tax > 0:
+                subtotal = round(max(0.0, grand_total - tax + discount), 2)
+            else:
+                subtotal = grand_total
+
+        # 5. ITEM EXTRACTION (Parse actual text lines)
+        items: List[Dict[str, Any]] = []
+        for line in lines:
+            # Look for lines with a product name and price ending in decimal
+            # e.g., "Sony WH-1000XM5 Headphones 1 22998.20"
+            m_item = re.search(r"^([A-Za-z0-9\s\-\(\)\.,&]{3,50}?)\s+(\d+(?:\.\d+)?)\s+(?:₹|Rs\.?)?\s*([\d,]+\.\d{2})$", line)
+            if m_item:
+                p_name = m_item.group(1).strip()
+                # Skip if it's a summary label
+                if any(w in p_name.lower() for w in ["total", "subtotal", "tax", "cgst", "sgst", "discount"]):
+                    continue
+                try:
+                    qty = float(m_item.group(2))
+                    tot = float(m_item.group(3).replace(",", ""))
+                    items.append({
+                        "product_name": p_name,
+                        "quantity": qty if qty > 0 else 1.0,
+                        "unit_price": round(tot / (qty or 1.0), 2),
+                        "total_price": tot,
+                        "category": "Electronics" if any(w in p_name.lower() for w in ["phone", "laptop", "cable", "sony", "apple", "samsung", "charger"]) else "Other"
+                    })
+                except Exception:
+                    pass
+
+        # If no line items parsed, use clean single item reflecting the actual document
+        if not items and grand_total > 0:
+            items.append({
+                "product_name": f"{merchant_name} Purchase",
+                "quantity": 1.0,
+                "unit_price": grand_total,
+                "total_price": grand_total,
+                "category": "Other"
+            })
+
+        # 6. WARRANTY & RETURN DETECTION
         warranty_duration = None
-        w_match = re.search(r"(\d+\s*(?:month|year|yr)s?\s*warranty)", raw_text, re.IGNORECASE)
+        w_match = re.search(r"(\d+\s*(?:month|year|yr)s?\s*(?:warranty|guarantee))", raw_text, re.IGNORECASE)
         if w_match:
             warranty_duration = w_match.group(1).title()
 
@@ -157,48 +246,45 @@ class RuleBasedFallbackExtractor(BaseAIExtractor):
             "merchant_name": merchant_name,
             "merchant_address": None,
             "merchant_phone": None,
-            "invoice_number": f"INV-{datetime.now().strftime('%Y%m%d%H%M')}",
+            "invoice_number": invoice_number,
             "receipt_number": None,
             "purchase_date": parsed_date,
             "currency": "INR",
-            "subtotal": round(grand_total * 0.85, 2) if grand_total > 0 else 0.0,
-            "discount": 0.0,
-            "tax": round(grand_total * 0.15, 2) if grand_total > 0 else 0.0,
-            "cgst": round(grand_total * 0.075, 2) if grand_total > 0 else 0.0,
-            "sgst": round(grand_total * 0.075, 2) if grand_total > 0 else 0.0,
-            "igst": 0.0,
+            "subtotal": subtotal,
+            "discount": discount,
+            "tax": tax,
+            "cgst": cgst,
+            "sgst": sgst,
+            "igst": igst,
             "additional_charges": 0.0,
             "delivery_fees": 0.0,
             "grand_total": grand_total,
-            "payment_method": "Credit / Debit Card",
+            "payment_method": "Online / Card",
             "document_type": "Tax Invoice",
             "warranty_duration": warranty_duration,
-            "return_policy": "7 days return policy",
+            "return_policy": None,
             "serial_number": None,
             "important_notes": None,
-            "items": [
-                {
-                    "product_name": "General Purchased Item",
-                    "quantity": 1.0,
-                    "unit_price": grand_total,
-                    "total_price": grand_total,
-                    "category": "Electronics" if warranty_duration else "Groceries"
-                }
-            ] if grand_total > 0 else []
+            "items": items
         }
 
 class AIExtractionService:
-    """Manages AI extraction provider switching and quality validation."""
-    def __init__(self):
-        if settings.OPENAI_API_KEY:
-            self.extractor = OpenAIExtractor(settings.OPENAI_API_KEY)
-        elif settings.GEMINI_API_KEY:
-            self.extractor = GeminiExtractor(settings.GEMINI_API_KEY)
+    """Manages dynamic AI extraction provider switching and quality validation."""
+    def get_extractor(self) -> BaseAIExtractor:
+        # Check settings and environment dynamically on each request
+        openai_key = os.environ.get("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+        gemini_key = os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY
+        
+        if openai_key and len(openai_key.strip()) > 10:
+            return OpenAIExtractor(openai_key.strip())
+        elif gemini_key and len(gemini_key.strip()) > 10:
+            return GeminiExtractor(gemini_key.strip())
         else:
-            self.extractor = RuleBasedFallbackExtractor()
+            return RuleBasedFallbackExtractor()
 
     async def process_receipt(self, raw_text: str, filename: str = "", ocr_confidence: float = 0.95) -> Dict[str, Any]:
-        data = await self.extractor.extract(raw_text, filename)
+        extractor = self.get_extractor()
+        data = await extractor.extract(raw_text, filename)
         
         # Parse into ReceiptCreate model
         items = [ReceiptItemBase(**item) for item in data.get("items", [])]
@@ -229,7 +315,7 @@ class AIExtractionService:
             delivery_fees=float(data.get("delivery_fees") or 0.0),
             grand_total=float(data.get("grand_total") or 0.0),
             payment_method=data.get("payment_method"),
-            document_type=data.get("document_type") or "receipt",
+            document_type=data.get("document_type") or "Tax Invoice",
             warranty_duration=data.get("warranty_duration"),
             return_policy=data.get("return_policy"),
             serial_number=data.get("serial_number"),
