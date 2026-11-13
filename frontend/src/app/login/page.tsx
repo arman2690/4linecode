@@ -22,13 +22,23 @@ export default function LoginPage() {
 
     try {
       if (isSupabaseConfigured && supabase) {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
+        if (data?.session?.access_token) {
+          localStorage.setItem("receiptiq_token", data.session.access_token);
+        }
+        if (data?.user) {
+          localStorage.setItem("receiptiq_user", JSON.stringify({
+            email: data.user.email,
+            full_name: data.user.user_metadata?.full_name || "User",
+          }));
+        }
       } else {
         // Local developer session fallback
+        localStorage.setItem("receiptiq_token", "demo-token");
         localStorage.setItem("receiptiq_user", JSON.stringify({
           email: email || "demo@receiptiq.local",
           full_name: "Demo User",
@@ -43,6 +53,7 @@ export default function LoginPage() {
   };
 
   const handleQuickDemoLogin = () => {
+    localStorage.setItem("receiptiq_token", "demo-token");
     localStorage.setItem("receiptiq_user", JSON.stringify({
       email: "demo@receiptiq.local",
       full_name: "Arman Demo User",

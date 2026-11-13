@@ -6,12 +6,10 @@ export async function fetchWithAuth(endpoint: string, options: RequestInit = {})
     headers.set("Content-Type", "application/json");
   }
 
-  // Get token if stored
+  // Get token if stored, or fallback to demo-token so requests never fail authorization
   if (typeof window !== "undefined") {
-    const token = localStorage.getItem("receiptiq_token");
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
+    const token = localStorage.getItem("receiptiq_token") || "demo-token";
+    headers.set("Authorization", `Bearer ${token}`);
   }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {

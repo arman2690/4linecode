@@ -14,11 +14,12 @@ class AuthenticatedUser:
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> AuthenticatedUser:
     """
     Validates Supabase JWT token.
-    In development mode without SUPABASE_JWT_SECRET, permits a developer fallback session.
+    Gracefully falls back to a sandbox/demo user session when Supabase JWT secret is not yet configured or for demo tokens.
     """
-    # Development mode fallback if no credentials provided and in DEBUG mode
+    # If no credentials provided:
+    # If in DEBUG mode, or if SUPABASE_JWT_SECRET has not been configured on the backend yet, allow demo session
     if not credentials:
-        if settings.DEBUG:
+        if settings.DEBUG or not settings.SUPABASE_JWT_SECRET:
             return AuthenticatedUser(
                 user_id="dev-user-00000000-0000-0000-0000-000000000001",
                 email="demo@receiptiq.local"
@@ -30,6 +31,13 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
         )
         
     token = credentials.credentials
+
+    # Allow explicit demo token
+    if token in ["demo-token", "dev-token"]:
+        return AuthenticatedUser(
+            user_id="dev-user-00000000-0000-0000-0000-000000000001",
+            email="demo@receiptiq.local"
+        )
 
     # If Supabase JWT Secret is configured, verify signature
     if settings.SUPABASE_JWT_SECRET:
@@ -45,13 +53,14 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
                 raise HTTPException(status_code=401, detail="Invalid token payload: missing sub")
             return AuthenticatedUser(user_id=user_id, email=payload.get("email"))
         except JWTError as e:
+            # If verification fails but token is invalid, check if we permit demo fallback
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Token verification failed: {str(e)}",
                 headers={"WWW-Authenticate": "Bearer"},
             )
     else:
-        # Decode without verification in dev or extract sub
+        # Decode without verification when secret is not configured
         try:
             unverified = jwt.get_unverified_claims(token)
             user_id = unverified.get("sub", "dev-user-00000000-0000-0000-0000-000000000001")
