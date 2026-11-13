@@ -13,11 +13,11 @@ app = FastAPI(
     openapi_url="/api/openapi.json"
 )
 
-# CORS Middleware
+# CORS Middleware for Vercel, localhost, and custom deployments
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permits local Next.js frontends and preview deployments
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
