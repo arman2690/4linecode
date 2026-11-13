@@ -89,6 +89,9 @@ export const api = {
   getSpendingTimeline: (days: number = 30) =>
     fetchWithAuth(`/analytics/spending?days=${days}`),
 
+  getMonthlySpending: (months: number = 6) =>
+    fetchWithAuth(`/analytics/monthly?months=${months}`),
+
   getPriceIntelligence: () => fetchWithAuth("/analytics/price-intelligence"),
 
   // Warranties

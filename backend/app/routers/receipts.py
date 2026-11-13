@@ -28,21 +28,26 @@ async def upload_and_process_receipt(
     Step 1: Validate file type and size.
     Step 2: Preprocess document (orientation, contrast, PDF rasterization).
     Step 3: Extract raw text via OCR or digital PDF parser.
-    Step 4: Send to AI extraction pipeline for structured extraction.
-    Step 5: Apply 3-colour traffic light quality assessment.
-    Returns structured data for user review/verification before saving.
+    Step 4: Send to AI extraction pipeline for strict structured extraction.
+    Step 5: Apply scan accuracy confidence scoring.
+    Returns strictly formatted receipt data for user review/verification.
     """
     content_type = file.content_type or ""
-    if content_type not in settings.ALLOWED_FILE_TYPES:
-        # Check by extension
-        ext = os.path.splitext(file.filename)[1].lower()
-        if ext not in [".jpg", ".jpeg", ".png", ".webp", ".pdf"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported file type '{content_type or ext}'. Please upload JPG, PNG, WEBP, or PDF."
-            )
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    
+    if ext not in [".jpg", ".jpeg", ".png", ".webp", ".pdf"] and content_type not in settings.ALLOWED_FILE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format '{ext or content_type}'. Please upload JPG, PNG, WEBP, or PDF."
+        )
 
     contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty. Please select a valid receipt image or document."
+        )
+
     if len(contents) > settings.UPLOAD_MAX_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -51,33 +56,27 @@ async def upload_and_process_receipt(
 
     # Preprocess & Extract text
     raw_text = ""
-    confidence = 0.95
+    confidence = 0.0
 
     try:
-        if content_type == "application/pdf" or file.filename.lower().endswith(".pdf"):
+        if content_type == "application/pdf" or ext == ".pdf":
             raw_text, confidence = OCREngine.extract_text_from_pdf(contents)
-            if not raw_text:
-                # Render to image and OCR
-                images = ImagePreprocessor.process_pdf(contents)
-                if images:
-                    _, enhanced = ImagePreprocessor.process_image(images[0])
-                    raw_text, confidence = OCREngine.extract_text_from_image(enhanced)
         else:
             orig, enhanced = ImagePreprocessor.process_image(contents)
             raw_text, confidence = OCREngine.extract_text_from_image(enhanced)
-            if not raw_text:
-                # Fallback to filename or generic parsing
-                raw_text = f"Purchase Receipt from uploaded image: {file.filename}"
-                confidence = 0.85
+            if not raw_text or len(raw_text.strip()) < 10:
+                # If enhanced failed, try raw color image
+                raw_text, confidence = OCREngine.extract_text_from_image(orig)
     except Exception as e:
-        raw_text = f"Scanned Receipt {file.filename}"
-        confidence = 0.70
+        print(f"[Upload] OCR Extraction error: {e}")
+        raw_text = ""
+        confidence = 0.0
 
     # AI structured extraction
     ai_key = request.headers.get("x-ai-key")
     result = await ai_extraction_service.process_receipt(
         raw_text=raw_text,
-        filename=file.filename,
+        filename=file.filename or "",
         ocr_confidence=confidence,
         ai_key=ai_key
     )

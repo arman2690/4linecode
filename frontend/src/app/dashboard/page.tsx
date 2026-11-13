@@ -32,10 +32,11 @@ import {
   Cell
 } from "recharts";
 
-const CATEGORY_COLORS = ["#14213D", "#4568DC", "#16A34A", "#EAB308", "#9333EA", "#06B6D4", "#F97316"];
+const CATEGORY_COLORS = ["#14213D", "#4568DC", "#16A34A", "#EAB308", "#9333EA", "#06B6D4", "#F97316", "#EC4899", "#8B5CF6", "#10B981", "#64748B"];
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
+  const [trendView, setTrendView] = useState<"daily" | "monthly">("monthly");
   const [summary, setSummary] = useState<any>({
     total_spending_current_month: 0,
     total_spending_previous_month: 0,
@@ -46,6 +47,7 @@ export default function DashboardPage() {
     currency: "INR"
   });
   const [timeline, setTimeline] = useState<any[]>([]);
+  const [monthlyTrends, setMonthlyTrends] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [recentReceipts, setRecentReceipts] = useState<any[]>([]);
   const [currency, setCurrency] = useState("INR");
@@ -56,15 +58,17 @@ export default function DashboardPage() {
       const activeCurrency = localStorage.getItem("receiptiq_currency") || "INR";
       setCurrency(activeCurrency);
 
-      const [sumRes, timeRes, catRes, recRes] = await Promise.all([
+      const [sumRes, timeRes, monthRes, catRes, recRes] = await Promise.all([
         api.getSummary(activeCurrency).catch(() => null),
         api.getSpendingTimeline(14).catch(() => []),
+        api.getMonthlySpending(6).catch(() => []),
         api.getCategories().catch(() => []),
         api.getReceipts().catch(() => []),
       ]);
 
       if (sumRes) setSummary(sumRes);
       if (Array.isArray(timeRes)) setTimeline(timeRes);
+      if (Array.isArray(monthRes)) setMonthlyTrends(monthRes);
       if (Array.isArray(catRes)) setCategories(catRes);
       if (Array.isArray(recRes)) setRecentReceipts(recRes.slice(0, 5));
     } catch (err) {
@@ -81,6 +85,9 @@ export default function DashboardPage() {
     window.addEventListener("currencyChanged", handleCurrencyEvent);
     return () => window.removeEventListener("currencyChanged", handleCurrencyEvent);
   }, []);
+
+  const chartData = trendView === "monthly" ? monthlyTrends : timeline;
+  const chartKey = trendView === "monthly" ? "month" : "date";
 
   return (
     <AppLayout>
@@ -101,7 +108,7 @@ export default function DashboardPage() {
               href="/upload"
               className="inline-flex items-center gap-2 bg-brand-navy hover:bg-slate-800 text-white font-semibold px-4 py-2.5 rounded-xl shadow-subtle hover:shadow-card transition-all text-sm"
             >
-              <ScanLine className="w-4 h-4 text-brand-green" />
+              <ScanLine className="w-4 h-4 text-emerald-400" />
               <span>Scan New Receipt</span>
             </Link>
           </div>
@@ -162,7 +169,7 @@ export default function DashboardPage() {
           <div className="bg-white p-5 rounded-2xl border border-brand-border shadow-subtle space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-brand-muted uppercase tracking-wider">
-                Average Basket Size
+                Average Transaction
               </span>
               <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
                 <TrendingUp className="w-4 h-4" />
@@ -201,25 +208,51 @@ export default function DashboardPage() {
 
         {/* Charts Section */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Daily Spending Trend Chart */}
+          {/* Spending Trend Chart */}
           <div className="lg:col-span-8 bg-white p-6 rounded-2xl border border-brand-border shadow-subtle space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-base font-bold text-brand-navy">Daily Spending Trend</h3>
-                <p className="text-xs text-brand-muted">Past 14 days activity</p>
+                <h3 className="text-base font-bold text-brand-navy">
+                  {trendView === "monthly" ? "Monthly Spending Trends" : "Daily Spending Activity"}
+                </h3>
+                <p className="text-xs text-brand-muted">
+                  {trendView === "monthly" ? "Past 6 months cumulative spending" : "Past 14 days activity"}
+                </p>
               </div>
-              <Link href="/analytics" className="text-xs font-semibold text-brand-blue hover:underline">
-                View Full Analytics
-              </Link>
+
+              <div className="flex items-center gap-2">
+                <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold">
+                  <button
+                    onClick={() => setTrendView("monthly")}
+                    className={`px-3 py-1 rounded-md transition-all ${
+                      trendView === "monthly" ? "bg-white text-brand-navy shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    onClick={() => setTrendView("daily")}
+                    className={`px-3 py-1 rounded-md transition-all ${
+                      trendView === "daily" ? "bg-white text-brand-navy shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    14 Days
+                  </button>
+                </div>
+
+                <Link href="/analytics" className="text-xs font-semibold text-brand-blue hover:underline hidden sm:inline">
+                  Analytics
+                </Link>
+              </div>
             </div>
 
             <div className="h-64 w-full pt-4">
-              {timeline.length > 0 ? (
+              {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={timeline}>
+                  <BarChart data={chartData}>
                     <XAxis
-                      dataKey="date"
-                      tickFormatter={(d) => d.slice(5)}
+                      dataKey={chartKey}
+                      tickFormatter={(d) => trendView === "monthly" ? d : d.slice(5)}
                       stroke="#94A3B8"
                       fontSize={11}
                       tickLine={false}
@@ -232,7 +265,7 @@ export default function DashboardPage() {
                     />
                     <Tooltip
                       formatter={(val: any) => [`₹${Number(val).toFixed(2)}`, "Spent"]}
-                      labelFormatter={(label) => `Date: ${label}`}
+                      labelFormatter={(label) => `${trendView === "monthly" ? "Month" : "Date"}: ${label}`}
                       contentStyle={{ backgroundColor: "#14213D", borderRadius: "8px", color: "#fff", fontSize: "12px" }}
                     />
                     <Bar dataKey="amount" fill="#4568DC" radius={[4, 4, 0, 0]} />
@@ -249,8 +282,8 @@ export default function DashboardPage() {
           {/* Category Breakdown Donut */}
           <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-brand-border shadow-subtle space-y-4 flex flex-col justify-between">
             <div>
-              <h3 className="text-base font-bold text-brand-navy">Category Share</h3>
-              <p className="text-xs text-brand-muted">Where your money goes</p>
+              <h3 className="text-base font-bold text-brand-navy">Spending by Category</h3>
+              <p className="text-xs text-brand-muted">Distribution across standard categories</p>
             </div>
 
             <div className="h-44 w-full flex items-center justify-center my-2">
@@ -283,7 +316,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="space-y-1.5 pt-2 border-t border-slate-100 max-h-36 overflow-y-auto">
-              {categories.slice(0, 4).map((cat, idx) => (
+              {categories.slice(0, 5).map((cat, idx) => (
                 <div key={cat.category} className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2">
                     <span
@@ -305,7 +338,7 @@ export default function DashboardPage() {
         <div className="bg-white rounded-2xl border border-brand-border shadow-subtle overflow-hidden">
           <div className="p-6 border-b border-brand-border flex items-center justify-between">
             <div>
-              <h3 className="text-base font-bold text-brand-navy">Recent Purchases</h3>
+              <h3 className="text-base font-bold text-brand-navy">Recent Receipts</h3>
               <p className="text-xs text-brand-muted">Latest verified documents saved to your vault</p>
             </div>
             <Link
@@ -332,7 +365,7 @@ export default function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {recentReceipts.map((r) => {
-                    const primaryCat = r.items?.[0]?.category || "General";
+                    const primaryCat = r.category || r.items?.[0]?.category || "Other";
                     return (
                       <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
                         <td className="py-3.5 px-6">
@@ -383,7 +416,7 @@ export default function DashboardPage() {
                 href="/upload"
                 className="inline-flex items-center gap-1.5 text-xs font-semibold bg-brand-navy text-white px-4 py-2 rounded-xl"
               >
-                <ScanLine className="w-4 h-4 text-brand-green" />
+                <ScanLine className="w-4 h-4 text-emerald-400" />
                 <span>Upload First Receipt</span>
               </Link>
             </div>

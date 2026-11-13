@@ -71,13 +71,13 @@ async def get_category_breakdown(
         items = r.get("items", [])
         if items:
             for item in items:
-                cat = item.get("category") or "Other"
+                cat = item.get("category") or r.get("category") or "Other"
                 amt = float(item.get("total_price") or 0.0)
                 cat_totals[cat] += amt
                 cat_counts[cat] += 1
                 overall_total += amt
         else:
-            cat = "Other"
+            cat = r.get("category") or "Other"
             amt = float(r.get("grand_total") or 0.0)
             cat_totals[cat] += amt
             cat_counts[cat] += 1
@@ -107,7 +107,6 @@ async def get_spending_timeline(
     start_date = today - timedelta(days=days)
 
     day_map = defaultdict(lambda: {"amount": 0.0, "count": 0})
-    # Seed all days in range with 0
     for d in range(days + 1):
         dt = start_date + timedelta(days=d)
         day_map[dt.isoformat()] = {"amount": 0.0, "count": 0}
@@ -123,6 +122,45 @@ async def get_spending_timeline(
     result = [
         DailySpendingItem(date=d, amount=round(v["amount"], 2), count=v["count"])
         for d, v in sorted(day_map.items())
+    ]
+    return result
+
+@router.get("/monthly", response_model=List[MonthlySpendingItem])
+async def get_monthly_spending_trends(
+    months: int = Query(6, ge=3, le=24),
+    user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Calculates monthly spending trends from actual saved receipts."""
+    receipts = await db_service.get_receipts(user.user_id)
+    month_map = defaultdict(lambda: {"amount": 0.0, "count": 0})
+
+    # Prepare list of previous N months in chronological order
+    today = date.today()
+    for i in range(months - 1, -1, -1):
+        # Approximate month subtraction
+        year = today.year
+        month = today.month - i
+        while month <= 0:
+            month += 12
+            year -= 1
+        key = f"{year:04d}-{month:02d}"
+        month_map[key] = {"amount": 0.0, "count": 0}
+
+    for r in receipts:
+        p_date = r["purchase_date"]
+        key = f"{p_date.year:04d}-{p_date.month:02d}"
+        if key in month_map:
+            amt = float(r.get("grand_total") or 0.0)
+            month_map[key]["amount"] += amt
+            month_map[key]["count"] += 1
+
+    result = [
+        MonthlySpendingItem(
+            month=k,
+            amount=round(v["amount"], 2),
+            count=v["count"]
+        )
+        for k, v in sorted(month_map.items())
     ]
     return result
 
