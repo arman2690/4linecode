@@ -1,4 +1,4 @@
-﻿# ReceiptIQ — Your purchases. Understood.
+# ReceiptIQ — Your purchases. Understood.
 
 > **ReceiptIQ** is an AI-powered purchase and receipt management SaaS platform designed to transform raw purchase receipts (photographs, screenshots, and PDFs) into structured, actionable financial intelligence, automated warranty tracking, and purchase memory.
 
