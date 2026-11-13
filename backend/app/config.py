@@ -16,8 +16,13 @@ class Settings(BaseSettings):
     # Supabase
     SUPABASE_URL: Optional[str] = None
     SUPABASE_ANON_KEY: Optional[str] = None
+    SUPABASE_PUBLISHABLE_KEY: Optional[str] = None
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
     SUPABASE_JWT_SECRET: Optional[str] = None
+
+    @property
+    def effective_anon_key(self) -> Optional[str]:
+        return self.SUPABASE_ANON_KEY or self.SUPABASE_PUBLISHABLE_KEY
     
     # AI Providers
     OPENAI_API_KEY: Optional[str] = None
