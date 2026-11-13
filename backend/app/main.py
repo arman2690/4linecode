@@ -31,10 +31,16 @@ app.include_router(assistant.router, prefix=settings.API_V1_STR)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    # Log securely without sensitive payload details
+    # Log securely and return with explicit CORS headers so browsers do not throw 'Failed to fetch'
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
     return JSONResponse(
         status_code=500,
-        content={"detail": "An internal server error occurred while processing the request."}
+        content={"detail": f"An error occurred while processing the request: {str(exc)}"},
+        headers=headers,
     )
 
 @app.get("/")

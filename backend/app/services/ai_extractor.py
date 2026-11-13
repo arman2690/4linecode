@@ -51,8 +51,6 @@ class OpenAIExtractor(BaseAIExtractor):
 class GeminiExtractor(BaseAIExtractor):
     def __init__(self, api_key: str):
         self.api_key = api_key
-        # Use gemini-1.5-flash which is widely available and fast
-        self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
 
     async def extract(self, raw_text: str, filename: str = "") -> Dict[str, Any]:
         prompt = (
@@ -62,18 +60,22 @@ class GeminiExtractor(BaseAIExtractor):
             "currency (default INR), subtotal, discount, tax, cgst, sgst, igst, additional_charges, delivery_fees, grand_total, payment_method, "
             "document_type, warranty_duration, return_policy, serial_number, important_notes, and items "
             "(array of {product_name, quantity, unit_price, total_price, category}).\n\n"
-            f"Receipt Text:\n{raw_text}"
+            f"Receipt Text:\n{raw_text[:12000]}"
         )
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+        async with httpx.AsyncClient(timeout=20.0) as client:
             res = await client.post(
-                self.endpoint,
+                url,
                 headers={"Content-Type": "application/json"},
-                json={"contents": [{"parts": [{"text": prompt}]}]}
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"response_mime_type": "application/json"}
+                }
             )
             res.raise_for_status()
             data = res.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
-            clean = re.sub(r"^```json\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
+            clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
             return json.loads(clean)
 
 class RuleBasedFallbackExtractor(BaseAIExtractor):
@@ -284,7 +286,12 @@ class AIExtractionService:
 
     async def process_receipt(self, raw_text: str, filename: str = "", ocr_confidence: float = 0.95) -> Dict[str, Any]:
         extractor = self.get_extractor()
-        data = await extractor.extract(raw_text, filename)
+        try:
+            data = await extractor.extract(raw_text, filename)
+        except Exception as e:
+            # Fall back to high-precision rule parser if external AI service times out or errors
+            fallback = RuleBasedFallbackExtractor()
+            data = await fallback.extract(raw_text, filename)
         
         # Parse into ReceiptCreate model
         items = [ReceiptItemBase(**item) for item in data.get("items", [])]

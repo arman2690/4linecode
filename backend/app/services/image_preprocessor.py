@@ -1,14 +1,19 @@
 import io
 from PIL import Image, ImageOps, ImageEnhance
 import fitz  # PyMuPDF
-from typing import Tuple, List
+from typing import Tuple, List, Any
 
 class ImagePreprocessor:
     """Preprocesses receipt images and PDFs to optimize OCR accuracy."""
     
     @staticmethod
-    def process_image(image_bytes: bytes, max_dim: int = 2400) -> Image.Image:
-        image = Image.open(io.BytesIO(image_bytes))
+    def process_image(image_input: Any, max_dim: int = 2400) -> Tuple[Image.Image, Image.Image]:
+        if isinstance(image_input, bytes):
+            image = Image.open(io.BytesIO(image_input))
+        elif isinstance(image_input, Image.Image):
+            image = image_input
+        else:
+            image = Image.open(image_input)
         
         # 1. Correct EXIF orientation
         image = ImageOps.exif_transpose(image)
